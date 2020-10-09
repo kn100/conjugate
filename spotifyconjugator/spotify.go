@@ -3,36 +3,33 @@ package spotifyconjugator
 import (
 	"context"
 	"fmt"
+	"time"
 
+	"github.com/kn100/conjugate/configmanager"
 	"github.com/kn100/conjugate/conjugator"
+	"github.com/kn100/conjugate/util"
 	"github.com/zmb3/spotify"
+	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/clientcredentials"
 )
 
 type SpotifyConjugator struct {
-	SpotifyClientID     string
-	SpotifyClientSecret string
+	config configmanager.ConfigManager
 }
 
-func (spe SpotifyConjugator) Search(track conjugator.Track) ([]conjugator.Result, *conjugator.SearchError) {
-	if !spe.isConfigured() {
-		return nil, &conjugator.SearchError{Name: FriendlyName(), Details: "requires configuration."}
+func (spe *SpotifyConjugator) Search(track conjugator.Track) ([]conjugator.Result, *conjugator.SearchError) {
+	if !spe.IsConfigured() {
+		return nil, &conjugator.SearchError{Name: spe.FriendlyName(), Details: "requires configuration."}
 	}
-	config := &clientcredentials.Config{
-		ClientID:     spe.SpotifyClientID,
-		ClientSecret: spe.SpotifyClientSecret,
-		TokenURL:     spotify.TokenURL,
-	}
-	// TODO: store this token and reuse it until expiry
-	token, err := config.Token(context.Background())
+	token, err := spe.getToken()
 	if err != nil {
-		return nil, &conjugator.SearchError{Name: FriendlyName(), Details: fmt.Sprintf("unable to get a token, maybe the credentials are wrong: %s", err.Error())}
+		return nil, &conjugator.SearchError{Name: spe.FriendlyName(), Details: fmt.Sprintf("unable to get token. %s", err.Error())}
 	}
 
 	client := spotify.Authenticator{}.NewClient(token)
 	res, err := client.Search(track.FullTitle, spotify.SearchTypeTrack)
 	if err != nil {
-		return nil, &conjugator.SearchError{Name: FriendlyName(), Details: fmt.Sprintf("search failed. API limit hit? %s", err.Error())}
+		return nil, &conjugator.SearchError{Name: spe.FriendlyName(), Details: fmt.Sprintf("search failed. API limit hit? %s", err.Error())}
 	}
 
 	var results []conjugator.Result = []conjugator.Result{}
@@ -46,7 +43,7 @@ func (spe SpotifyConjugator) Search(track conjugator.Track) ([]conjugator.Result
 				Year:      fmt.Sprint(st.Album.ReleaseDateTime().Year()),
 			},
 			URI:    fmt.Sprintf("https://open.spotify.com/track/%s", st.ID.String()),
-			Source: FriendlyName(),
+			Source: spe.FriendlyName(),
 		}
 
 		results = append(results, result)
@@ -55,7 +52,7 @@ func (spe SpotifyConjugator) Search(track conjugator.Track) ([]conjugator.Result
 	return results, nil
 }
 
-func (spe SpotifyConjugator) ImFeelingLucky(track conjugator.Track) (conjugator.Result, *conjugator.SearchError) {
+func (spe *SpotifyConjugator) ImFeelingLucky(track conjugator.Track) (conjugator.Result, *conjugator.SearchError) {
 	results, err := spe.Search(track)
 	if err != nil {
 		return conjugator.Result{}, err
@@ -68,18 +65,77 @@ func (spe SpotifyConjugator) ImFeelingLucky(track conjugator.Track) (conjugator.
 
 }
 
-func (spe SpotifyConjugator) isConfigured() bool {
-	return spe.SpotifyClientID != "" && spe.SpotifyClientSecret != ""
+func (spe *SpotifyConjugator) IsConfigured() bool {
+	if (spe.config == configmanager.ConfigManager{}) {
+		cfgm := configmanager.ConfigManager{}
+		err := cfgm.Init(spe.FriendlyName())
+		if err != nil {
+			util.Failed(err.Error())
+			return false
+		}
+		spe.config = cfgm
+	}
+	return spe.config.Get("spotify-client-id") != "" && spe.config.Get("spotify-client-secret") != ""
 }
 
-func FriendlyName() string {
+func (spe *SpotifyConjugator) FriendlyName() string {
 	return "Spotify Data Conjugator"
 }
 
-func Help() string {
-	return "Some help text revolving around Spotify"
+func (spe *SpotifyConjugator) Configure() bool {
+	cfgm := configmanager.ConfigManager{}
+
+	err := cfgm.Init(spe.FriendlyName())
+	if err != nil {
+		util.Failed(err.Error())
+		return false
+	}
+
+	fmt.Println("You will need to have a (free or paid) Spotify account in order to get API Access to Spotify. Visit https://developer.spotify.com/documentation/general/guides/app-settings/ to find out how to generate these credentials")
+	clientID := util.Prompt("Enter your Spotify clientID")
+	clientSecret := util.Prompt("Enter your Spotify clientSecret")
+
+	err = cfgm.Set("spotify-client-id", clientID)
+	if err != nil {
+		util.Failed("Failed to save client ID")
+		return false
+	}
+
+	err = cfgm.Set("spotify-client-secret", clientSecret)
+	if err != nil {
+		util.Failed("Failed to save client secret")
+		return false
+	}
+
+	util.Successful("API Key set!")
+	spe.config = cfgm
+	return true
 }
 
-func (spe SpotifyConjugator) RequiredConfigurationOptions() []string {
-	return []string{"SpotifyClientID", "SpotifyClientSecret"}
+func (spe *SpotifyConjugator) getToken() (*oauth2.Token, error) {
+	var expiresAt time.Time
+	err := expiresAt.UnmarshalText([]byte(spe.config.Get("spotify-client-access-token-expires")))
+	if err != nil || time.Now().After(expiresAt) {
+		config := &clientcredentials.Config{
+			ClientID:     spe.config.Get("spotify-client-id"),
+			ClientSecret: spe.config.Get("spotify-client-secret"),
+			TokenURL:     spotify.TokenURL,
+		}
+		token, err := config.Token(context.Background())
+		if err != nil {
+			return nil, &conjugator.SearchError{Name: spe.FriendlyName(), Details: fmt.Sprintf("unable to get a token, maybe the credentials are wrong: %s", err.Error())}
+		}
+		spe.config.Set("spotify-client-access-token", token.AccessToken)
+		expiry, err := token.Expiry.MarshalText()
+		if err != nil {
+			return nil, &conjugator.SearchError{Name: spe.FriendlyName(), Details: fmt.Sprintf("unable to get expiry from token: %s", err.Error())}
+		}
+		spe.config.Set("spotify-client-access-token-expires", string(expiry))
+	}
+
+	return &oauth2.Token{
+		AccessToken: spe.config.Get("spotify-client-access-token"),
+		Expiry:      expiresAt,
+		TokenType:   "Bearer",
+	}, nil
 }

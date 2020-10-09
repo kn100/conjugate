@@ -2,14 +2,21 @@ package conjugator
 
 type Conjugator interface {
 	FriendlyName() string
-	Extract(link string) (Track, *ExtractionError)
-	CanExtract(link string) bool
-	RequiredConfigurationOptions() []string
-	ImFeelingLucky(Track) (Result, *SearchError)
-	Search(Track) ([]Result, *SearchError)
-	Help() string
+	IsConfigured() bool
+	Configure() bool
 }
 
+type SearchConjugator interface {
+	Conjugator
+	Search(Track) ([]Result, *SearchError)
+	ImFeelingLucky(Track) (Result, *SearchError)
+}
+
+type ExtractConjugator interface {
+	Conjugator
+	Extract(link string) (Track, *ExtractionError)
+	CanExtract(link string) bool
+}
 type Result struct {
 	FoundTrack Track
 	URI        string

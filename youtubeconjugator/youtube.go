@@ -5,57 +5,50 @@ import (
 	"fmt"
 	"regexp"
 
+	"github.com/kn100/conjugate/configmanager"
 	"github.com/kn100/conjugate/conjugator"
+	"github.com/kn100/conjugate/util"
 	"google.golang.org/api/option"
 	"google.golang.org/api/youtube/v3"
 )
 
 type YoutubeConjugator struct {
-	YoutubeDataAPIKey string
+	config configmanager.ConfigManager
 }
 
-func FriendlyName() string {
+func (yte *YoutubeConjugator) FriendlyName() string {
 	return "Youtube Data Conjugator"
 }
 
-func (yte YoutubeConjugator) Extract(link string) (conjugator.Track, *conjugator.ExtractionError) {
-	if !yte.isConfigured() {
-		return conjugator.Track{}, &conjugator.ExtractionError{Name: FriendlyName(), Details: "requires configuration."}
+func (yte *YoutubeConjugator) Extract(link string) (conjugator.Track, *conjugator.ExtractionError) {
+	if !yte.IsConfigured() {
+		return conjugator.Track{}, &conjugator.ExtractionError{Name: yte.FriendlyName(), Details: "requires configuration."}
 	}
 
 	id, ok := extractIDFromLink(link)
 	if !ok {
-		return conjugator.Track{}, &conjugator.ExtractionError{Name: FriendlyName(), Details: "couldn't extract the ID from that URL - is it valid?"}
+		return conjugator.Track{}, &conjugator.ExtractionError{Name: yte.FriendlyName(), Details: "couldn't extract the ID from that URL - is it valid?"}
 	}
 
-	yts, err := youtube.NewService(context.Background(), option.WithAPIKey(yte.YoutubeDataAPIKey))
+	yts, err := youtube.NewService(context.Background(), option.WithAPIKey(yte.config.Get("youtube-data-api-key")))
 	if err != nil {
-		return conjugator.Track{}, &conjugator.ExtractionError{Name: FriendlyName(), Details: err.Error()}
+		return conjugator.Track{}, &conjugator.ExtractionError{Name: yte.FriendlyName(), Details: err.Error()}
 	}
 
 	resp, err := yts.Videos.List([]string{"contentDetails", "snippet"}).Id(id).Do()
-
 	if err != nil {
-		return conjugator.Track{}, &conjugator.ExtractionError{Name: FriendlyName(), Details: fmt.Sprintf("Youtube responded with an error: %s", err.Error())}
+		return conjugator.Track{}, &conjugator.ExtractionError{Name: yte.FriendlyName(), Details: fmt.Sprintf("Youtube responded with an error: %s", err.Error())}
 	}
 	if len(resp.Items) < 1 {
-		return conjugator.Track{}, &conjugator.ExtractionError{Name: FriendlyName(), Details: "no results found"}
+		return conjugator.Track{}, &conjugator.ExtractionError{Name: yte.FriendlyName(), Details: "no results found"}
 	}
 
 	return makeTrack(resp.Items[0]), nil
 }
 
-func (yte YoutubeConjugator) CanExtract(link string) bool {
+func (yte *YoutubeConjugator) CanExtract(link string) bool {
 	_, ok := extractIDFromLink(link)
 	return ok
-}
-
-func (yte YoutubeConjugator) RequiredConfigurationOptions() []string {
-	return []string{"YoutubeDataAPIKey"}
-}
-
-func (yte YoutubeConjugator) Help() string {
-	return "SomeHelpText"
 }
 
 func extractIDFromLink(link string) (string, bool) {
@@ -67,8 +60,18 @@ func extractIDFromLink(link string) (string, bool) {
 	return "", false
 }
 
-func (yte YoutubeConjugator) isConfigured() bool {
-	return yte.YoutubeDataAPIKey != ""
+func (yte *YoutubeConjugator) IsConfigured() bool {
+	if (yte.config == configmanager.ConfigManager{}) {
+		cfgm := configmanager.ConfigManager{}
+		err := cfgm.Init(yte.FriendlyName())
+		if err != nil {
+			fmt.Println(err)
+			util.Failed(err.Error())
+			return false
+		}
+		yte.config = cfgm
+	}
+	return yte.config.Get("youtube-data-api-key") != ""
 }
 
 func makeTrack(video *youtube.Video) conjugator.Track {
@@ -80,4 +83,27 @@ func makeTrack(video *youtube.Video) conjugator.Track {
 	}
 	track.FullTitle = video.Snippet.Title
 	return track
+}
+
+func (yte *YoutubeConjugator) Configure() bool {
+	cfgm := configmanager.ConfigManager{}
+
+	err := cfgm.Init(yte.FriendlyName())
+	if err != nil {
+		util.Failed(err.Error())
+		return false
+	}
+
+	fmt.Println("You will need to have a Google account in order to get an API key for Youtube Data. See https://developers.google.com/youtube/registering_an_application for more info")
+	apiKey := util.Prompt("Enter your Youtube Data API key")
+
+	err = cfgm.Set("youtube-data-api-key", apiKey)
+	if err != nil {
+		util.Failed("Failed to save api key")
+		return false
+	}
+
+	util.Successful("API Key set!")
+	yte.config = cfgm
+	return true
 }
