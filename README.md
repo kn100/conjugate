@@ -10,7 +10,7 @@ Go check https://github.com/kn100/conjugate/releases and download the release th
 
 ## Usage
 
-After you've copied the `conjugate` binary somewhere in your path, run `conjugate`. It will request some configuration details. You'll need to provide it a Youtube Data API key, and a Spotify Client ID and secret.
+After you've copied the `conjugate` binary somewhere in your path, run `conjugate -reconfigure`. It will request some configuration details. You'll need to provide it a Youtube Data API key, and a Spotify Client ID and secret.
 
 From then on, you can run `conjugate` with the `-y=<link to song on Youtube or Youtube music>` flag, and if a match is found on Spotify, the link will be returned.
 
